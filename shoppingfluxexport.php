@@ -68,6 +68,12 @@ class ShoppingFluxExport extends Module
         if (empty($productsToBeTreated) || !isset($productsToBeTreated)) {
             Configuration::updateValue('SHOPPING_FLUX_PASSES', '200');
         }
+            
+        // SAM
+        // Check if carrier exist or active
+        if ($this->checkCarrierExist() == false)
+            $this->warning = $this->l('There is a carrier that is not active or has been deleted.');
+
     }
 
     public function install()
@@ -281,6 +287,10 @@ class ShoppingFluxExport extends Module
         
         $status_xml = $this->_checkToken();
         $status = is_object($status_xml) ? $status_xml->Response->Status : '';
+            
+            // SAM
+        if ($this->checkCarrierExist() == false)
+            $this->_html .= $this->displayWarning($this->l('There is a carrier that is not active or has been deleted.'));
         
         switch ($status) {
             case 'Client':
@@ -317,7 +327,7 @@ class ShoppingFluxExport extends Module
                 }
             }
         }
-        
+       
         return $this->_html;
     }
 
@@ -438,6 +448,7 @@ class ShoppingFluxExport extends Module
      */
     protected function _getAdvancedParametersContent($configuration)
     {
+       // d('fgbfg');
         if (!$this->isCurlInstalled(true)) {
             return;
         }
@@ -453,7 +464,8 @@ class ShoppingFluxExport extends Module
         foreach ($sf_carriers_xml->Response->Carriers->Carrier as $carrier) {
             $sf_carriers[] = (string)$carrier;
         }
-
+        Configuration::updateValue('SHOPPING_FLUX_CARRIERS_LIST',serialize($sf_carriers));
+        
         $html = '<h3>'.$this->l('Advanced Parameters').'</h3>
             <form method="post" action="'.Tools::safeOutput($_SERVER['REQUEST_URI']).'">
                 <fieldset>
@@ -461,12 +473,29 @@ class ShoppingFluxExport extends Module
                     <p>'.$this->l('Please see below carriers coming from your markeplaces managed on Shopping Feed. You can match them to your Prestashop carriers').'</p>';
 
         $actual_configuration = unserialize($configuration['SHOPPING_FLUX_SHIPPING_MATCHING']);
-
+        //$valid_carier_exist = true;
         foreach ($sf_carriers as $sf_carrier) {
+           
             $actual_value = isset($actual_configuration[base64_encode(Tools::safeOutput($sf_carrier))]) ? $actual_configuration[base64_encode(Tools::safeOutput($sf_carrier))] : $configuration['SHOPPING_FLUX_CARRIER'];
+
+//             $actual_carrier = new Carrier((int)$actual_value);
+           
+//             if (! Validate::isLoadedObject($actual_carrier) || $actual_carrier->active == 0 || $actual_carrier->deleted == 1) {
+               
+//                 $valid_carier_exist = false;
+//             }
+            
+        
+            
             $html .= '<p><label>'.Tools::safeOutput($sf_carrier).' : </label>'.$this->_getCarriersSelect($configuration, $actual_value, 'MATCHING['.base64_encode(Tools::safeOutput($sf_carrier)).']').'</p>';
         }
-
+        
+//         if (! $valid_carier_exist) {
+//             Configuration::updateValue('SHOPPING_FLUX_CARRIER_MATCH_EXIST', "not_exist");
+//         }
+//         else{
+//             Configuration::updateValue('SHOPPING_FLUX_CARRIER_MATCH_EXIST', "exist");
+//         }
         $html .= '<p style="margin-top:20px"><input type="submit" value="'.$this->l('Update').'" name="rec_shipping_config" class="button"/></p>
                 </fieldset>
             </form>';
@@ -1370,7 +1399,15 @@ class ShoppingFluxExport extends Module
                 $ret .= '<'.$fieldname.'><![CDATA['.$product->$fieldname.']]></'.$fieldname.'>';
             }
         }
-
+        
+        $combination = $product->getAttributeCombinations($configuration['PS_LANG_DEFAULT']);
+        if(count($combination) > 0){
+             $ret .= '<hierararchy><![CDATA[parent]]></hierararchy>';
+        }
+        else{
+           $ret .= '<hierararchy><![CDATA[simple]]></hierararchy>';
+        }
+        
         $ret .= '</caracteristiques>';
         return $ret;
     }
@@ -1411,6 +1448,8 @@ class ShoppingFluxExport extends Module
             $combinations[$combinaison['id_product_attribute']]['quantity'] = $combinaison['quantity'];
             $combinations[$combinaison['id_product_attribute']]['weight'] = $combinaison['weight'] + $product->weight;
             $combinations[$combinaison['id_product_attribute']]['reference'] = $combinaison['reference'];
+            $combinations[$combinaison['id_product_attribute']]['wholesale_price'] = $combinaison['wholesale_price'];
+            
         }
 
         $j = 0;
@@ -1441,6 +1480,7 @@ class ShoppingFluxExport extends Module
             $ret .= '<'.$this->_translateField('price').'><![CDATA['.$product->getPrice(true, $id, 2, null, false, true, 1).']]></'.$this->_translateField('price').'>';
             $ret .= '<'.$this->_translateField('old_price').'><![CDATA['.$product->getPrice(true, $id, 2, null, false, false, 1).']]></'.$this->_translateField('old_price').'>';
             $ret .= '<'.$this->_translateField('shipping_cost').'><![CDATA['.$this->_getShipping($product, $configuration, $carrier, $id, $combination['weight']).']]></'.$this->_translateField('shipping_cost').'>';
+            $ret .= '<wholesale-price><![CDATA['.$combination['wholesale_price'].']]></wholesale-price>';
             $ret .= '<images>';
 
             $image_child = true;
@@ -1462,6 +1502,8 @@ class ShoppingFluxExport extends Module
 
             $ret .= '</images>';
             $ret .= '<attributs>';
+            
+            $ret .= '<hierararchy><![CDATA[child]]></hierararchy>';
 
             asort($combination['attributes']);
             foreach ($combination['attributes'] as $attributeName => $attributeValue) {
@@ -3489,4 +3531,34 @@ class ShoppingFluxExport extends Module
             }
         }
     }
+        
+    // SAM
+    /**
+     * Check if carrier exist
+     */
+    protected function checkCarrierExist()
+    {
+        $carrierIfExist = Configuration::get('SHOPPING_FLUX_CARRIERS_LIST');
+        if (empty($carrierIfExist)) {
+            return true;
+        }
+        
+        $sf_carriers = unserialize(Configuration::get('SHOPPING_FLUX_CARRIERS_LIST'));
+        $actual_configuration = unserialize(Configuration::get('SHOPPING_FLUX_SHIPPING_MATCHING'));
+        $valid_carier_exist = true;
+        foreach ($sf_carriers as $sf_carrier) {
+            
+            $actual_value = isset($actual_configuration[base64_encode(Tools::safeOutput($sf_carrier))]) ? $actual_configuration[base64_encode(Tools::safeOutput($sf_carrier))] : Configuration::get('SHOPPING_FLUX_CARRIER');
+            
+            $actual_carrier = new Carrier((int) $actual_value);
+            
+            if (! Validate::isLoadedObject($actual_carrier) || $actual_carrier->active == 0 || $actual_carrier->deleted == 1) {
+                
+                $valid_carier_exist = false;
+            }
+        }
+        
+        return $valid_carier_exist;
+    }
+
 }
